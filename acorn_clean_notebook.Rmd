@@ -24,12 +24,13 @@ overview <- acorn_data
 ```{r}
 #look at missing data for white count
 
-table(overview$baseline_wbc, useNA = "ifany")
+overview %>%
+  sum(is.na(baseline_wbc))
 
 #exclude 110 with missing values for baseline wbc
 
-overview_new <- overview[-(which(overview$baseline_wbc %in% NA)), ]
-table(overview_new$baseline_wbc, useNA = "ifany")
+overview_new <- overview %>%
+  filter(!is.na(baseline_wbc))
 
 #look at distribution of white count for remaining patients
 wbc_dist <- ggplot(overview_new, aes(x = baseline_wbc)) +
@@ -56,7 +57,7 @@ smart_abx = overview_new%>%rename(id=record_id)%>%
                           mutate(CKD = ifelse(CKD==2,1,CKD))%>%
                           mutate(CKD = ifelse(is.na(CKD),0,CKD))%>%
                         dplyr::select(id, trt_group, inhosp_mortality28, death14_newrrt14, icufreedays28, delc14, comagdelcfreedays14, comagdelc14, persistent_renal_dysfunction28, rrtfreedays28, newrrt28, newrrt14, highest_cr_28, age, sex, race.eth, baseline_sofa, baseline_coma_delirium, incident_aki_with_onstudy_14.factor, CKD, sepsis, received_vancomycin_14, received_assigned_therapy_28, MAKE14, preill_creat_calculate, preill_creat, preill_creat_observed,
-                                      baseline_vent, baseline_anyvasopressor, source_of_infection, location, priorhd, days_assigned_therapy_14, baseline_wbc)%>%
+                                      baseline_vent, baseline_anyvasopressor, source_of_infection, location, priorhd, days_assigned_therapy_14, baseline_wbc, baseline_neutropenia)%>%
   mutate(n=1)%>%
   mutate(race_white = ifelse(race.eth=="White, Non-Hispanic", 1, 0))%>%
   mutate(coma= as.factor(comagdelcfreedays14))
@@ -68,6 +69,7 @@ smart_abx$incident_aki_with_onstudy_14.factor <- ordered(smart_abx$incident_aki_
 
 smart_abx$source_of_infection <- as.factor(smart_abx$source_of_infection)
 
+smart_abx$baseline_neutropnia <- as.factor(smart_abx$baseline_neutropenia)
 
 ```
 
@@ -159,12 +161,9 @@ mody <- glm(predictor ~  trt_group + baseline_wbc + age + sex+  baseline_sofa + 
 #effect modification by white count
 #28 day mortality
 moda <- glm(inhosp_mortality28 ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = smart_abx, family = "binomial")
-  mod.suma <- summary(moda)
-  mod.expa <- cbind(
-    OR = exp(coef(moda)),
-    exp(confint(moda)),
-    p = mod.suma$coefficients[, "Pr(>|z|)"]
-  )
+
+moda_results <- model_results(moda)
+moda_results
  
 modb <- glm(inhosp_mortality28 ~  trt_group + baseline_wbc + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = smart_abx, family = "binomial")
   mod.sumb <- summary(modb)
@@ -279,6 +278,10 @@ s_v_mortality_int_results <- model_results(s_v_mortality_int)
 s_v_mortality_results <- model_results(s_v_mortality)
   
 ```
+
+
+
+
 ```{r}
 #sensitivity: vanc only
 vanc <- smart_abx %>%
@@ -311,6 +314,9 @@ s_mortality_int_results <- model_results(s_mortality_int)
 
 s_mortality_results <- model_results(s_mortality)
 ```
+
+
+
 ```{r}
 #sensitivity: exclude abdominal infection
 no_abdominal <- smart_abx %>%
@@ -372,11 +378,18 @@ write.csv(table1, file = "myTable.csv")
 ```{r}
 #look at baseline characteristics only in highest quartile
 
+overview_new <- overview_new %>%
+  mutate(wbc_quartile = ntile(baseline_wbc, 4))
+
+#make labeled factor for plots
+overview_new <- overview_new %>%
+  mutate(wbc_quintile = recode_factor(ntile(baseline_wbc, 4), `1` = "<7", `2` = "7-11", `3` = "11-16", `4` = ">16"))
+
 overview_q4 <- subset(overview_new, wbc_quartile == 4)
 
 
 #table 1 with patient level stuff
-Vars <- c("trt_group", "vancomycin_day0","received_vancomycin_14", "age",  "bmi",  "baseline_sofa", "daysaccurate_timezero_firstanyantibiotics", "CHARLSON", "sex", "race.eth", "baseline_vent", "prevalent_aki.factor", "sepsis", "source_of_infection", "baseline_anyvasopressor", "inhosp_mortality28", "MAKE14", "comagdelcfreedays14", "baseline_coma_delirium")
+Vars <- c("trt_group", "vancomycin_day0","received_vancomycin_14", "age",  "bmi",  "baseline_sofa", "daysaccurate_timezero_firstanyantibiotics", "CHARLSON", "sex", "race.eth", "baseline_vent", "prevalent_aki.factor", "sepsis", "source_of_infection", "baseline_anyvasopressor", "inhosp_mortality28", "MAKE14", "comagdelcfreedays14", "baseline_coma_delirium", "baseline_neutropenia", "ever_transplant")
 
 catVars <- c("vancomycin_day0","received_vancomycin_14","sex", "race.eth", "baseline_vent", "prevalent_aki.factor", "sepsis", "source_of_infection", "baseline_anyvasopressor")
 
@@ -390,11 +403,11 @@ write.csv(q4_table1, file = "q4Table.csv")
 #repeat for each quartile
 #q1
 overview_q1 <- subset(overview_new, wbc_quintile == "<7")
-q1_table <- CreateTableOne(vars = q4Vars, overview_q1, factorVars = q4catVars, strata = c("trt_group"))
+q1_table <- CreateTableOne(vars = Vars, overview_q1, factorVars = catVars, strata = c("trt_group"))
 
 #q2
 overview_q2 <- subset(overview_new, wbc_quintile == "7-11")
-q2_table <- CreateTableOne(vars = q4Vars, overview_q2, factorVars = q4catVars, strata = c("trt_group"))
+q2_table <- CreateTableOne(vars = Vars, overview_q2, factorVars = catVars, strata = c("trt_group"))
 
 q2_table <- print(q2_table, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
 ## Save to a CSV file
@@ -402,7 +415,7 @@ write.csv(q2_table, file = "q2_Table.csv")
 
 #q3
 overview_q3 <- subset(overview_new, wbc_quintile == "11-16")
-q3_table <- CreateTableOne(vars = q4Vars, overview_q3, factorVars = q4catVars, strata = c("trt_group"))
+q3_table <- CreateTableOne(vars = Vars, overview_q3, factorVars = catVars, strata = c("trt_group"))
 
 q3_table <- print(q3_table, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
 ## Save to a CSV file
@@ -411,7 +424,7 @@ write.csv(q3_table, file = "q3_Table.csv")
 
 ```{r}
 #28 day mortality by quartile
-moda <- glm(inhosp_mortality28 ~ trt_group +  wbc_quartile + wbc_quartile*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(source_of_infection) + location + preill_creat_calculate + priorhd, data = smart_abx, family = "binomial")
+moda <- glm(inhosp_mortality28 ~ trt_group +  factor(wbc_quartile) + factor(wbc_quartile)*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(source_of_infection) + location + preill_creat_calculate + priorhd, data = smart_abx, family = "binomial")
   mod.suma <- summary(moda)
   mod.expa <- cbind(
     OR = exp(coef(moda)),
@@ -433,7 +446,7 @@ moda <- glm(inhosp_mortality28 ~ trt_group +  wbc_quartile + wbc_quartile*trt_gr
 
 ```{r}
 #make14 by quartile
-make_quart_int <- glm(MAKE14 ~ trt_group +  wbc_quartile + wbc_quartile*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(source_of_infection) + location + preill_creat + priorhd, data = smart_abx, family = "binomial")
+make_quart_int <- glm(MAKE14 ~ trt_group +  factor(wbc_quartile) + factor(wbc_quartile)*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(source_of_infection) + location + preill_creat + priorhd, data = smart_abx, family = "binomial")
   mod.sum.make.int <- summary(make_quart_int)
   make_quart_int_results <- cbind(
     OR = exp(coef(make_quart_int)),
@@ -457,9 +470,15 @@ make_quart_int <- glm(MAKE14 ~ trt_group +  wbc_quartile + wbc_quartile*trt_grou
 smart_abx$wbc_quartile <- as.factor(smart_abx$wbc_quartile)
 
 #incident aki
-aki.a <- MASS::polr(incident_aki_with_onstudy_14.factor ~ trt_group + wbc_quartile + wbc_quartile*trt_group + age + sex +  baseline_sofa + baseline_vent + baseline_anyvasopressor + preill_creat + factor(source_of_infection) + location, data = smart_abx, Hess = TRUE)
+aki.a <- MASS::polr(incident_aki_with_onstudy_14.factor ~ trt_group + factor(wbc_quartile) + factor(wbc_quartile)*trt_group + age + sex +  baseline_sofa + baseline_vent + baseline_anyvasopressor + preill_creat + factor(source_of_infection) + location, data = smart_abx, Hess = TRUE)
+
+aki_quart_results <- exp(cbind(OR = coef(aki.a), (confint(aki.a))))
 
 aki.b <- MASS::polr(incident_aki_with_onstudy_14.factor ~ trt_group + factor(wbc_quartile) + age + sex +  baseline_sofa + baseline_vent + baseline_anyvasopressor + preill_creat + factor(source_of_infection) + location, data = smart_abx, Hess = TRUE)
+
+
+
+aki_quart_results <- exp(cbind(OR = coef(aki.a), exp(conf_intervals)))
 
 summary_aki <- summary(aki.a)
 
@@ -494,7 +513,10 @@ print(or_results)
 
 ```{r}
 #coma or delirium incidence
-ever_coma_int_quart = glm(comagdelc14 ~ trt_group +  wbc_quartile + wbc_quartile*trt_group + age + sex+  baseline_sofa  + baseline_anyvasopressor + preill_creat + priorhd + factor(source_of_infection) + location, data = smart_abx, family = "binomial")
+ever_coma_int_quart = glm(comagdelc14 ~ trt_group +  factor(wbc_quartile) + factor(wbc_quartile)*trt_group + age + sex+  baseline_sofa  + baseline_anyvasopressor + preill_creat + priorhd + factor(source_of_infection) + location, data = smart_abx, family = "binomial")
+
+coma_quart_results <- exp(cbind(OR = coef(ever_coma_int_quart), confint(ever_coma_int_quart)))
+
 ever_coma_quart = glm(comagdelc14 ~ trt_group +  wbc_quartile + age + sex+  baseline_sofa  + baseline_anyvasopressor + preill_creat + priorhd + factor(source_of_infection) + location, data = smart_abx, family = "binomial")
 
 lrtest(ever_coma_int_quart, ever_coma_quart)
@@ -514,6 +536,8 @@ ever_coma_quart_results <- cbind(
     p = ever_coma_quart_sum$coefficients[, "Pr(>|z|)"]
   )
 ```
+
+
 ```{r}
 #odds of outcome in each quartile
 #mortality
@@ -699,6 +723,8 @@ coma_OR_forest <- forest(quartile_OR_data[, c(1, 5:6)],
             theme = tm)
 coma_OR_forest
 ```
+
+
 ```{r}
 #powerful way to get data by quartile that involves no typing!
 #could also use lapply instead of map or vice versa
@@ -726,6 +752,8 @@ quartile_OR_data <- smart_abx %>%
   mutate('WBC Quartile' = factor(wbc_quartile, levels = c(1, 2, 3, 4), labels = c("<7", "7-11", "11-16", ">16"))) %>%
   select('WBC Quartile', OR, LL, UL)
 ```
+
+
 ```{r}
 #calculate marginal effects of model to estimate effect size
 
@@ -781,5 +809,804 @@ smart_abx %>%
     mean = mean(baseline_wbc),
     range = range(baseline_wbc))
   
+```
+
+## Revisions
+
+```{r}
+# look at different WBC cutoffs
+
+#create quartiles of initial wbc
+smart_abx <- smart_abx %>%
+  mutate(wbc_clinical = case_when(
+    baseline_wbc <= 4 ~ "<4",
+    baseline_wbc > 4 & baseline_wbc <= 11 ~ "4-11",
+    baseline_wbc > 11 ~ ">11"
+  ))
+
+smart_abx %>%
+  group_by(wbc_clinical) %>%
+  count()
+
+smart_abx <- smart_abx %>%
+  mutate(wbc_clinical = factor(wbc_clinical, levels = c("<4", "4-11", ">11")))
+  
+
+
+
+```
+
+
+```{r}
+#plot for new wbc levels
+
+smart_abx %>%
+  group_by(wbc_clinical, trt_group) %>%
+  summarise(
+    N = sum(n),
+    death = mean(inhosp_mortality28),
+    se = sd(inhosp_mortality28)/sqrt(N), .groups = 'drop') %>%
+  ggplot(aes(x = wbc_clinical, y = death, color = trt_group)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin = death - se, ymax = death + se), width=0.2) +  # Add error bars
+  labs(
+    title = "Mortality rate by WBC Clinical Cutoffs and Treatment Group",
+    x = "WBC Clinical Cutoffs",
+    y = "Mortality Rate"
+  ) +
+  theme_classic()
+  
+```
+
+```{r}
+#modeling by wbc clinical cutoffs
+
+library(broom)
+library(purrr)
+library(forcats)
+
+clinical_OR_data <- smart_abx %>%
+  group_by(wbc_clinical) %>%
+  nest() %>%
+  mutate(
+    fit = map(data, function(df) glm(inhosp_mortality28 ~ trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + preill_creat + priorhd, data = df, family = "binomial")),
+    output = map(fit, tidy),
+    ci = map(fit, confint)) %>%
+  unnest(c(output, ci)) %>%
+  filter(term == "trt_groupzosyn") %>% 
+  mutate(
+    OR = exp(estimate),
+    LL = exp(ci[,1]),
+    UL = exp(ci[2])
+  ) %>% 
+  select(wbc_clinical, OR, LL, UL)  %>%
+  arrange(wbc_clinical) 
+
+clinical_OR_data$` ` <- paste(rep(" ", 25), collapse = " ")
+
+
+# Create a confidence interval column to display
+clinical_OR_data$`OR (95% CI)` <- sprintf("%.2f (%.2f to %.2f)",
+                                     clinical_OR_data$OR, clinical_OR_data$LL, clinical_OR_data$UL)
+
+
+tm <- forest_theme(core=list(fg_params=list(hjust=01, x=0.9)), rowhead=list(fg_params=list(hjust=0.5, x=0.5)), padding = unit(c(50, 50), "mm"))
+
+clinical_OR_forest <- forest(clinical_OR_data[, c(1, 5:6)],
+            est = clinical_OR_data$OR,
+            lower = clinical_OR_data$LL, 
+            upper = clinical_OR_data$UL,
+            ci_column = 2,
+            ref_line = 1,
+            arrow_lab = c("Favors piperacillin/tazobactam", "Favors Cefepime"),
+            xlim = c(0, 3),
+            ticks_at = c(0.5, 1, 1.5, 2, 2.5),
+            title = "Mortality with Clinical Cutoff", 
+            theme = tm)
+clinical_OR_forest
+```
+
+
+
+```{r}
+#wbc cutoffs using sirs cutoffs
+
+smart_abx <- smart_abx %>%
+  mutate(wbc_sirs = case_when(
+    baseline_wbc <= 4 ~ "<4",
+    baseline_wbc > 4 & baseline_wbc <= 12 ~ "4-12",
+    baseline_wbc > 12 ~ ">12"
+  ))
+
+smart_abx %>%
+  group_by(wbc_sirs) %>%
+  count()
+
+smart_abx <- smart_abx %>%
+  mutate(wbc_sirs = factor(wbc_sirs, levels = c("<4", "4-12", ">12")))
+  
+
+
+
+```
+```{r}
+# data visualization using sirs cutoffs
+smart_abx %>%
+  group_by(wbc_sirs, trt_group) %>%
+  summarise(
+    N = sum(n),
+    death = mean(inhosp_mortality28),
+    se = sd(inhosp_mortality28)/sqrt(N), .groups = 'drop') %>%
+  ggplot(aes(x = wbc_sirs, y = death, color = trt_group)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin = death - se, ymax = death + se), width=0.2) +  # Add error bars
+  labs(
+    title = "Mortality rate by WBC SIRS Cutoffs and Treatment Group",
+    x = "WBC SIRS Groups",
+    y = "Mortality Rate"
+  ) +
+  theme_classic()
+```
+```{r}
+# modeling using sirs cutoffs
+sirs_OR_data <- smart_abx %>%
+  group_by(wbc_sirs) %>%
+  nest() %>%
+  mutate(
+    fit = map(data, function(df) glm(inhosp_mortality28 ~ trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + preill_creat + priorhd, data = df, family = "binomial")),
+    output = map(fit, tidy),
+    ci = map(fit, confint)) %>%
+  unnest(c(output, ci)) %>%
+  filter(term == "trt_groupzosyn") %>% 
+  mutate(
+    OR = exp(estimate),
+    LL = exp(ci[,1]),
+    UL = exp(ci[2])
+  ) %>% 
+  select(wbc_sirs, OR, LL, UL)  %>%
+  arrange(wbc_sirs) 
+
+sirs_OR_data$` ` <- paste(rep(" ", 35), collapse = " ")
+
+
+# Create a confidence interval column to display
+sirs_OR_data$`OR (95% CI)` <- sprintf("%.2f (%.2f to %.2f)",
+                                     sirs_OR_data$OR, sirs_OR_data$LL, sirs_OR_data$UL)
+
+
+tm <- forest_theme(core=list(fg_params=list(hjust=01, x=0.9)), rowhead=list(fg_params=list(hjust=0.5, x=0.5)), padding = unit(c(50, 50), "mm"))
+
+sirs_OR_forest <- forest(sirs_OR_data[, c(1, 5:6)],
+            est = sirs_OR_data$OR,
+            lower = sirs_OR_data$LL, 
+            upper = sirs_OR_data$UL,
+            ci_column = 2,
+            ref_line = 1,
+            arrow_lab = c("Favors piperacillin/tazobactam", "Favors Cefepime"),
+            xlim = c(0, 3),
+            ticks_at = c(0.5, 1, 1.5, 2, 2.5),
+            title = "Mortality with SIRS Cutoffs", 
+            theme = tm)
+sirs_OR_forest
+```
+```{r}
+# wbc epic
+
+smart_abx <- smart_abx %>%
+  mutate(wbc_epic = case_when(
+    baseline_wbc <= 4 ~ "<4",
+    baseline_wbc > 4 & baseline_wbc <= 10 ~ "4-10",
+    baseline_wbc > 10 ~ ">10"
+  ))
+
+smart_abx %>%
+  group_by(wbc_epic) %>%
+  count()
+
+smart_abx <- smart_abx %>%
+  mutate(wbc_epic = factor(wbc_epic, levels = c("<4", "4-10", ">10")))
+  
+```
+
+```{r}
+# wbc epic modeling
+
+epic_OR_data <- smart_abx %>%
+  mutate(`WBC Epic Cutoffs` = wbc_epic) %>%
+  group_by(`WBC Epic Cutoffs`) %>%
+  nest() %>%
+  mutate(
+    fit = map(data, function(df) glm(inhosp_mortality28 ~ trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + preill_creat + priorhd, data = df, family = "binomial")),
+    output = map(fit, tidy),
+    ci = map(fit, confint)) %>%
+  unnest(c(output, ci)) %>%
+  filter(term == "trt_groupzosyn") %>% 
+  mutate(
+    OR = exp(estimate),
+    LL = exp(ci[,1]),
+    UL = exp(ci[2])
+  ) %>% 
+  select(`WBC Epic Cutoffs`, OR, LL, UL)  %>%
+  arrange(`WBC Epic Cutoffs`) 
+
+epic_OR_data$` ` <- paste(rep(" ", 35), collapse = " ")
+
+
+# Create a confidence interval column to display
+epic_OR_data$`OR (95% CI)` <- sprintf("%.2f (%.2f to %.2f)",
+                                     epic_OR_data$OR, epic_OR_data$LL, epic_OR_data$UL)
+
+
+tm <- forest_theme(base_size = 10, core=list(fg_params=list(hjust=01, x=0.9)), rowhead=list(fg_params=list(hjust=0.5, x=1)), padding = unit(c(50, 80, 50, 50), "mm"))
+
+epic_OR_forest <- forest(epic_OR_data[, c(1, 5:6)],
+            est = epic_OR_data$OR,
+            lower = epic_OR_data$LL, 
+            upper = epic_OR_data$UL,
+            ci_column = 2,
+            ref_line = 1,
+            arrow_lab = c("Favors piperacillin/tazobactam", "Favors Cefepime"),
+            xlim = c(0, 3),
+            ticks_at = c(0.5, 1, 1.5, 2, 2.5),
+            title = "Figure E2: Mortality with Epic Cutoffs", 
+            theme = tm)
+epic_OR_forest
+
+```
+
+## look at neutropenia
+
+looks like in general wbc is low in this cohort though there are a few with higher wbc which seems potentially not correct
+```{r}
+#neutropenia
+
+overview_new %>%
+  group_by(baseline_neutropenia) %>%
+  count()
+
+#wbc distribution
+
+overview_new %>%
+  filter(baseline_neutropenia == "Yes") %>%
+  ggplot(aes(x= baseline_wbc)) +
+  geom_histogram()
+
+overview_new %>%
+  filter(baseline_neutropenia == "Yes") %>%
+  group_by(trt_group) %>%
+  mutate(N = n(),
+         death = mean(inhosp_mortality28),
+         se = sd(inhosp_mortality28)/sqrt(N), .groups = 'drop') %>%
+  ggplot(aes(x = trt_group, y = death)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin = death - se, ymax = death + se), width=0.2) +  # Add error bars
+  labs(
+    title = "Mortality rate by Treatment group among neutropenic patients",
+    x = "Treatment group",
+    y = "Mortality Rate"
+  ) +
+  theme_classic()
+```
+
+```{r}
+# exclude neutropenic patients
+
+no_neutropenia <- smart_abx %>%
+  filter(baseline_neutropenia == "No")
+
+neutropenia_excluded <- interaction_model(no_neutropenia$inhosp_mortality28, no_neutropenia)
+
+results <- model_results(neutropenia_excluded)
+results
+
+no_int_no_neutro <- no_interaction_model(no_neutropenia$inhosp_mortality28, no_neutropenia)
+
+lrtest(neutropenia_excluded, no_int_no_neutro)
+
+# add neutropenia to existing model
+
+neutropenia_included <- glm(inhosp_mortality28 ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + baseline_neutropenia + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = smart_abx, family = "binomial")
+
+new_results <- model_results(neutropenia_included)
+new_results
+```
+
+### transplant
+
+```{r}
+#transplant
+
+overview_new %>%
+  group_by(transplant) %>%
+  count()
+
+overview_new <- overview_new %>%
+  mutate(ever_transplant = factor(ifelse(transplant == "None", "No", "Yes")))
+
+#wbc distribution
+
+overview_new %>%
+  filter(ever_transplant == "Yes") %>%
+  ggplot(aes(x= baseline_wbc)) +
+  geom_histogram()
+
+overview_new %>%
+  filter(ever_transplant == "Yes") %>%
+  group_by(trt_group) %>%
+  mutate(N = n(),
+         death = mean(inhosp_mortality28),
+         se = sd(inhosp_mortality28)/sqrt(N), .groups = 'drop') %>%
+  ggplot(aes(x = trt_group, y = death)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin = death - se, ymax = death + se), width=0.2) +  # Add error bars
+  labs(
+    title = "Mortality rate by Treatment group among transplant patients",
+    x = "Treatment group",
+    y = "Mortality Rate"
+  ) +
+  theme_classic()
+```
+```{r}
+#transplant modeling
+
+# look only among transplant patients
+
+ transplant_only <- overview_new %>%
+  filter(ever_transplant == "Yes")
+
+transplant_only_model <- interaction_model(transplant_only$inhosp_mortality28, transplant_only)
+
+results <- model_results(transplant_only_model)
+results
+
+# add transplant to existing model
+
+include_transplant <- glm(inhosp_mortality28 ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + baseline_neutropenia + ever_transplant + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = overview_new, family = "binomial")
+
+new_results <- model_results(include_transplant)
+new_results
+
+```
+
+
+## co-receipt of flagyl 
+
+```{r}
+new_smart_abx <- smart_abx %>%
+  mutate(record_id = id) %>%
+  left_join(acorn_emory_additional, by = "record_id")
+
+new_smart_abx %>%
+  group_by(trt_group, baseline_METRONIDAZOLE) %>%
+  count()
+
+new_smart_abx %>%
+  group_by(trt_group, baseline_CLINDAMYCIN) %>%
+  count()
+
+new_smart_abx <- new_smart_abx %>%
+  mutate(other_abx = ifelse(baseline_CLINDAMYCIN == "Yes" | baseline_METRONIDAZOLE == "Yes", "Yes", "No"))
+
+new_smart_abx <- new_smart_abx %>%
+  mutate(wbc_quartile = ntile(baseline_wbc, 4))
+
+#add co-receipt to model
+
+other_abx_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + other_abx + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = new_smart_abx, family = "binomial")
+
+other_abx_results <- model_results(other_abx_model)
+other_abx_results
+
+
+#filter for people who did not also get anaerobes
+
+no_other_abx <- new_smart_abx %>%
+  filter(other_abx == "No")
+
+no_other_abx_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = no_other_abx, family = "binomial")
+
+no_other_abx_results <- model_results(other_abx_model)
+no_other_abx_results
+
+# look only in people who also got anaerobes
+
+all_other_abx <- new_smart_abx %>%
+  filter(other_abx == "Yes" | trt_group == "zosyn")
+
+all_abx_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = all_other_abx, family = "binomial")
+
+all_abx_results <- model_results(all_abx_model)
+all_abx_results
+
+all_abx_no_int <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = all_other_abx, family = "binomial")
+
+lrtest(all_abx_model, all_abx_no_int)
+
+```
+
+## OR data with no other antibiotics
+
+```{r}
+no_OR_data <- no_other_abx %>%
+  group_by(wbc_epic) %>%
+  nest() %>%
+  mutate(
+    fit = map(data, function(df) glm(inhosp_mortality28.x ~ trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + preill_creat + priorhd, data = df, family = "binomial")),
+    output = map(fit, tidy),
+    ci = map(fit, confint)) %>%
+  unnest(c(output, ci)) %>%
+  filter(term == "trt_groupzosyn") %>% 
+  mutate(
+    OR = exp(estimate),
+    LL = exp(ci[,1]),
+    UL = exp(ci[2])
+  ) %>% 
+  select(wbc_epic, OR, LL, UL)  %>%
+  arrange(wbc_epic) 
+
+no_OR_data$` ` <- paste(rep(" ", 35), collapse = " ")
+
+
+# Create a confidence interval column to display
+no_OR_data$`OR (95% CI)` <- sprintf("%.2f (%.2f to %.2f)",
+                                     no_OR_data$OR, no_OR_data$LL, no_OR_data$UL)
+
+
+tm <- forest_theme(core=list(fg_params=list(hjust=01, x=0.9)), rowhead=list(fg_params=list(hjust=0.5, x=0.5)), padding = unit(c(50, 50), "mm"))
+
+no_OR_forest <- forest(no_OR_data[, c(1, 5:6)],
+            est = no_OR_data$OR,
+            lower = no_OR_data$LL, 
+            upper = no_OR_data$UL,
+            ci_column = 2,
+            ref_line = 1,
+            arrow_lab = c("Favors piperacillin/tazobactam", "Favors Cefepime"),
+            xlim = c(0, 3),
+            ticks_at = c(0.5, 1, 1.5, 2, 2.5),
+            title = "Mortality with Epic Cutoff with no Other Antibiotics", 
+            theme = tm)
+no_OR_forest
+```
+
+## look at culture data
+
+cultures of interest are urine, sputum, blood, and other. unfortunately don't have additional data on what the other cultures were. All columns have potentially more than one value
+
+Things to think about: 
+- what to consider as primary source if more than one positive (esp if one is blood and same organim in urine or other source)
+- just because culture positive does that mean that is the confirmed infectious source (i.e. does the organism matter)?
+- 
+
+```{r}
+
+micro_cols <- c("sputum_cx_14day", "urine_cx_14day", "blood_cx_14day", "other_cx_14day")
+
+#determine if all values are NA or no growth
+
+all_neg <- function(x) {
+  ifelse(is.na(x), TRUE,
+         sapply(strsplit(x, ","), function(vals) {
+           all(trimws(vals) %in% c("No growth", NA))
+         }))
+}
+
+# identify source - blood, sputum, urine, other
+new_smart_abx <- new_smart_abx %>%
+  mutate(
+    infectious_source = case_when(
+      if_all(all_of(micro_cols), all_neg) ~ "Culture Negative",
+      !all_neg(urine_cx_14day) & if_all(c(sputum_cx_14day, blood_cx_14day, other_cx_14day), all_neg) ~ "Urine",
+      !all_neg(blood_cx_14day) & if_all(c(sputum_cx_14day, urine_cx_14day, other_cx_14day), all_neg) ~ "Blood",
+      !all_neg(sputum_cx_14day) & if_all(c(urine_cx_14day, blood_cx_14day, other_cx_14day), all_neg) ~ "Sputum",
+      !all_neg(other_cx_14day) & if_all(c(sputum_cx_14day, urine_cx_14day, blood_cx_14day), all_neg) ~ "Other",
+      TRUE ~ "Multiple"   # fallback if >1 source is positive
+    )
+  )
+
+new_smart_abx %>%
+  group_by(infectious_source) %>%
+  count()
+
+new_smart_abx %>%
+  filter(infectious_source == "Multiple") %>%
+  select(micro_cols)
+  head()
+  
+  
+#identify organism
+
+  bug_dict <- tribble(
+  ~organism,            ~category,
+  "E. coli",            "Gram-negative",
+  "Klebsiella",         "Gram-negative",
+  "Pseudomonas",        "Gram-negative",
+  "Enterobacter",       "Gram-negative",
+  "Staphylococcus aureus", "Gram-positive",
+  "Streptococcus pneumoniae", "Gram-positive",
+  "Enterococcus",       "Gram-positive",
+  "Candida",            "Fungi",
+  "Aspergillus",        "Fungi"
+)
+
+  # Split multiple values and clean
+split_bugs <- function(x) {
+  if (is.na(x)) return(NA_character_)
+  bugs <- trimws(unlist(strsplit(x, ",")))
+  if (all(bugs %in% c("No growth", NA))) return(NA_character_)
+  return(bugs)
+}
+
+# Map bug names to categories
+classify_bugs <- function(bugs, dict) {
+  if (all(is.na(bugs))) return(NA_character_)
+  tibble(
+    bug = bugs
+  ) %>%
+    left_join(dict, by = c("bug" = "organism")) %>%
+    mutate(category = coalesce(category, "Unknown"))
+}
+
+new_smart_abx <- new_smart_abx %>%
+  rowwise() %>%
+  mutate(
+    # assign source
+    infectious_source = case_when(
+      if_all(all_of(micro_cols), ~ all_neg(.x)) ~ "Culture Negative",
+      !all_neg(urine_cx_14day) & if_all(c(sputum_cx_14day, blood_cx_14day, other_cx_14day), all_neg) ~ "Urine",
+      !all_neg(blood_cx_14day) & if_all(c(sputum_cx_14day, urine_cx_14day, other_cx_14day), all_neg) ~ "Blood",
+      !all_neg(sputum_cx_14day) & if_all(c(urine_cx_14day, blood_cx_14day, other_cx_14day), all_neg) ~ "Sputum",
+      !all_neg(other_cx_14day) & if_all(c(sputum_cx_14day, urine_cx_14day, blood_cx_14day), all_neg) ~ "Other",
+      TRUE ~ "Multiple"
+    ),
+    # extract bugs from urine column (do same for others if you like)
+    urine_bugs = list(split_bugs(urine_cx_14day)),
+    blood_bugs = list(split_bugs(blood_cx_14day)),
+    sputum_bugs = list(split_bugs(sputum_cx_14day)),
+    other_bugs  = list(split_bugs(other_cx_14day))
+  ) %>%
+  ungroup()
+
+bugs_long <- new_smart_abx %>%
+  select(id, infectious_source,
+         urine_bugs, blood_bugs, sputum_bugs, other_bugs) %>%
+  pivot_longer(cols = ends_with("_bugs"), names_to = "source", values_to = "bugs") %>%
+  unnest(bugs) %>%
+  filter(!is.na(bugs)) %>%
+  left_join(bug_dict, by = c("bugs" = "organism")) %>%
+  mutate(category = coalesce(category, "Unknown"))
+
+# unknown bugs for review
+
+unknown_bugs <- bugs_long %>%
+  filter(category == "Unknown") %>%
+  distinct(bugs) %>%
+  arrange(bugs)
+
+# This gives you a tidy list of bugs to review and add to your dictionary
+unknown_bugs
+
+
+```
+
+## code to create survival plot
+
+
+```{r}
+library(survival)
+install.packages("survminer")
+library(survminer)
+
+# Convert inhosp_mortality28 to binary numeric
+new_smart_abx <- new_smart_abx %>%
+  mutate(event = as.numeric(inhosp_mortality28.x == "Yes"),
+         WBC_Quartile = factor(wbc_quartile, 
+                               levels = c(1, 2, 3, 4), 
+                               ordered = TRUE, 
+                               labels = c("<7", "7-11", "11-16", ">16")))   
+
+# Create a survival object
+surv_obj <- Surv(time = new_smart_abx$hours_start_death, event = new_smart_abx$event)
+
+# Fit the survival curve by trt_group
+fit <- survfit(surv_obj ~ trt_group, data = new_smart_abx)
+
+# Plot the curve
+ggsurvplot(fit, data = new_smart_abx, pval = TRUE, risk.table = TRUE,
+           legend.title = "Treatment Group",
+           xlab = "Days", ylab = "Survival Probability")
+
+install.packages("ggsurvfit")
+library(ggsurvfit)
+
+fit1 <- survfit2(Surv(hours_start_death, inhosp_mortality28.x) ~ trt_group, data = new_smart_abx) 
+
+ggsurvplot_facet(fit1, new_smart_abx, facet.by = "wbc_epic")
+
+ggsurv
+
+#survival curve by WBC quartile
+
+fit2 <- survfit2(Surv(hours_start_death, inhosp_mortality28.x) ~ trt_group, data = new_smart_abx) 
+
+
+survival_curve <- ggsurvplot_facet(fit2, new_smart_abx, facet.by = "WBC_Quartile") +
+  theme_minimal()
+
+#new fit2
+
+fit2 <- survfit2(Surv(hours_start_death, event) ~ trt_group, data = new_smart_abx)
+survival_curve <- ggsurvplot_facet(fit2, new_smart_abx, facet.by = "WBC_Quartile") +
+  theme_minimal()
+
+survival_curve <- ggsurvplot(fit2, new_smart_abx)
+
+fit3 <- survfit2(Surv(hours_start_death, inhosp_mortality28.x) ~ trt_group + WBC_Quartile, data = new_smart_abx)
+survival_curve2 <- ggsurvplot_facet(fit3, new_smart_abx, facet.by = "WBC_Quartile") +
+  theme_minimal()
+
+
+```
+
+
+
+### calculate absolute risk difference and predicted probability at different wbc levels
+```{r}
+smart_abx <- smart_abx %>%
+  mutate(across(where(is.character), as.factor),
+         baseline_anyvasopressor = as.factor(baseline_anyvasopressor))
+
+#model of interest
+
+moda <- glm(inhosp_mortality28 ~ trt_group + baseline_wbc + baseline_wbc*trt_group + age + sex+ baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = smart_abx, family = "binomial")
+
+# Example WBC levels to evaluate
+wbc_levels <- c(7, 11, 16)
+
+# Build a "newdata" grid for prediction
+pred_data <- expand.grid(
+  baseline_wbc = wbc_levels,
+  trt_group = levels(smart_abx$trt_group),
+  age = mean(smart_abx$age, na.rm = TRUE),
+  sex = "Male",   # choose reference or common value
+  baseline_sofa = mean(smart_abx$baseline_sofa, na.rm = TRUE),
+  baseline_vent = "No",   # set to reference/typical
+  baseline_anyvasopressor = "1",
+  source_of_infection = "Lung",
+  location = "Medical ICU",
+  preill_creat = mean(smart_abx$preill_creat, na.rm = TRUE),
+  priorhd = "No"
+)
+
+#obtain predicted probabilities
+pred_data$pred_prob <- predict(moda, newdata = pred_data, type = "response")
+
+#calculate risk differences
+
+risk_diff <- pred_data %>%
+  group_by(baseline_wbc) %>%
+  summarise(
+    abs_risk_diff = diff(pred_prob),  # assumes exactly 2 groups
+    .groups = "drop"
+)
+
+# predicted probability and risk difference in one place
+
+pred_table <- pred_grid %>%
+  tidyr::pivot_wider(names_from = trt_group, values_from = pred_prob) %>%
+  mutate(abs_risk_diff = !!sym(levels(smart_abx$trt_group)[2]) - 
+                        !!sym(levels(smart_abx$trt_group)[1])) %>%
+  select(baseline_wbc, cefepime, zosyn, abs_risk_diff) %>%
+  filter(baseline_wbc %in% c(7, 11, 16))
+
+pred_table
+```
+
+
+```{r}
+#graph of predicted probabilities
+
+ggplot(pred_data, aes(x = baseline_wbc, y = pred_prob, color = trt_group)) +
+  geom_line() +
+  geom_point() +
+  labs(y = "Predicted Mortality Probability",
+       x = "Baseline WBC",
+       title = "Predicted Mortality by WBC and Treatment")
+```
+### smooth curve of predicted probability by wbc 
+
+```{r}
+# Range of WBC values (e.g. 1 to 30)
+wbc_seq <- seq(1, 35, by = 0.5)
+
+pred_grid <- expand.grid(
+  baseline_wbc = wbc_seq,
+  trt_group = levels(smart_abx$trt_group)
+)
+
+# Use a template row to preserve factor levels
+template <- smart_abx[1, ]
+
+pred_grid$age <- mean(smart_abx$age, na.rm = TRUE)
+pred_grid$sex <- template$sex
+pred_grid$baseline_sofa <- mean(smart_abx$baseline_sofa, na.rm = TRUE)
+pred_grid$baseline_vent <- template$baseline_vent
+pred_grid$baseline_anyvasopressor <- template$baseline_anyvasopressor
+pred_grid$source_of_infection <- template$source_of_infection
+pred_grid$location <- template$location
+pred_grid$preill_creat <- mean(smart_abx$preill_creat, na.rm = TRUE)
+pred_grid$priorhd <- template$priorhd
+
+#predict probabilities
+
+pred_grid$pred_prob <- predict(moda, newdata = pred_grid, type = "response")
+
+# plot curve
+
+ggplot(pred_grid, aes(x = baseline_wbc, y = pred_prob, color = trt_group)) +
+  geom_line(size = 1.2) +
+  labs(
+    x = "Baseline WBC",
+    y = "Predicted 28-day Mortality Probability",
+    title = "Predicted Mortality by WBC and Treatment"
+  ) +
+  theme_minimal()
+```
+### table one with neutropenia and transplant
+
+```{r}
+##creating Table 1
+#characteristics to capture: age, sex, race, smoking, baseline creatinine, Charlson, baseline qSOFA, infection source
+
+#table 1 with patient level stuff
+myVars <- c("trt_group", "vancomycin_day0","received_vancomycin_14", "age",  "bmi",  "baseline_sofa", "daysaccurate_timezero_firstanyantibiotics", "CHARLSON", "sex", "race.eth", "baseline_vent", "prevalent_aki.factor", "sepsis", "source_of_infection", "baseline_anyvasopressor", "inhosp_mortality28", "MAKE14", "comagdelcfreedays14", "baseline_coma_delirium", "baseline_neutropenia", "transplant")
+
+catVars <- c("trt_group", "vancomycin_day0","received_vancomycin_14","sex", "race.eth", "baseline_vent", "prevalent_aki.factor", "sepsis", "source_of_infection", "baseline_anyvasopressor", "inhosp_mortality28", "baseline_neutropenia", "transplant")
+
+table1 <- CreateTableOne(vars = myVars, data = overview_new, factorVars = catVars, strata = "trt_group")
+table1
+
+table1 <- print(table1, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
+## Save to a CSV file
+write.csv(table1, file = "myTable.csv")
+
+#repeat, stratified by treatment group
+table1_trt_group <- CreateTableOne(vars = myVars, overview_new, factorVars = catVars, strata = c("trt_group"))
+table1_trt_group
+
+#stratified by wbc quartile
+table1_quartile <- CreateTableOne(vars = myVars, overview_new, factorVars = catVars, strata = c("wbc_quartile"))
+table1_quartile
+```
+### wbc distribution based on septic vs not
+
+```{r}
+new_smart_abx %>%
+  group_by(sepsis) %>%
+  summarise(mean = mean(baseline_wbc),
+            median = median(baseline_wbc),
+            range = range(baseline_wbc),
+            min = min(baseline_wbc),
+            max = max(baseline_wbc))
+```
+
+
+```{r}
+#data for survival plot
+
+new_smart_abx <- new_smart_abx %>%
+  mutate(event = as.numeric(inhosp_mortality28.x == "Yes"),
+         WBC_Quartile = factor(wbc_quartile, 
+                               levels = c(1, 2, 3, 4), 
+                               ordered = TRUE, 
+                               labels = c("<7", "7-11", "11-16", ">16")))   
+
+# Create a survival object
+surv_obj <- Surv(time = new_smart_abx$hours_start_death, event = new_smart_abx$event)
+
+surv_plot_data <- new_smart_abx %>%
+  select(id, wbc_quartile, wbc_epic, inhosp_mortality28.x, hours_start_death, trt_group)
+
+# Export the data frame to a CSV file
+write_csv(surv_plot_data, "surv_plot_data.csv")
 ```
 
