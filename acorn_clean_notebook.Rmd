@@ -1316,17 +1316,20 @@ new_smart_abx %>%
 #identify organism
 
   bug_dict <- tribble(
-  ~organism,            ~category,
-  "E. coli",            "Gram-negative",
-  "Klebsiella",         "Gram-negative",
-  "Pseudomonas",        "Gram-negative",
-  "Enterobacter",       "Gram-negative",
-  "Staphylococcus aureus", "Gram-positive",
-  "Streptococcus pneumoniae", "Gram-positive",
-  "Enterococcus",       "Gram-positive",
-  "Candida",            "Fungi",
-  "Aspergillus",        "Fungi"
+  ~pattern,                 ~category,
+  "^E\\. coli$",            "Gram-negative",
+  "Klebsiella",             "Gram-negative",
+  "Pseudomonas",            "Gram-negative",
+  "Enterobacter",           "Gram-negative",
+  "Staphylococcus",         "Gram-positive",   # catches aureus, epidermidis, etc.
+  "Streptococcus",          "Gram-positive",   # catches pneumoniae, viridans, etc.
+  "Enterococcus",           "Gram-positive",
+  "Candida",                "Fungi",
+  "Aspergillus",            "Fungi",
+  "Acinetobactor",          "Gram-negative"
+
 )
+
 
   # Split multiple values and clean
 split_bugs <- function(x) {
@@ -1337,14 +1340,31 @@ split_bugs <- function(x) {
 }
 
 # Map bug names to categories
-classify_bugs <- function(bugs, dict) {
-  if (all(is.na(bugs))) return(NA_character_)
-  tibble(
-    bug = bugs
-  ) %>%
-    left_join(dict, by = c("bug" = "organism")) %>%
-    mutate(category = coalesce(category, "Unknown"))
+classify_bug <- function(bug, dict) {
+  match <- dict %>%
+    filter(grepl(pattern, bug, ignore.case = TRUE)) %>%
+    slice_head(n = 1)
+  
+  if (nrow(match) == 0) {
+    return("Unknown")
+  } else {
+    return(match$category)
+  }
 }
+
+#vectorized classify bug to run faster
+
+# Expand each regex into a column match
+classify_bugs_fast <- function(bugs, dict) {
+  # For each bug, find first matching pattern
+  out <- rep("Unknown", length(bugs))
+  for (i in seq_len(nrow(dict))) {
+    hits <- grepl(dict$pattern[i], bugs, ignore.case = TRUE)
+    out[hits & out == "Unknown"] <- dict$category[i]
+  }
+  return(out)
+}
+
 
 new_smart_abx <- new_smart_abx %>%
   rowwise() %>%
@@ -1366,14 +1386,36 @@ new_smart_abx <- new_smart_abx %>%
   ) %>%
   ungroup()
 
+# look at infectious source
+
+new_smart_abx %>%
+  group_by(trt_group, infectious_source) %>%
+  count()
+
+#does culture negative go down if you look only in sepsis?
+
+new_smart_abx %>%
+  filter(sepsis == "Yes") %>%
+  group_by(trt_group, infectious_source) %>%
+  count()
+
+#classify bugs, slow
 bugs_long <- new_smart_abx %>%
-  select(id, infectious_source,
+  select(id, infectious_source, inhosp_mortality28.x, trt_group, baseline_wbc, age, sex,  baseline_sofa, baseline_vent, baseline_anyvasopressor, location, preill_creat, priorhd,
          urine_bugs, blood_bugs, sputum_bugs, other_bugs) %>%
   pivot_longer(cols = ends_with("_bugs"), names_to = "source", values_to = "bugs") %>%
   unnest(bugs) %>%
-  filter(!is.na(bugs)) %>%
-  left_join(bug_dict, by = c("bugs" = "organism")) %>%
-  mutate(category = coalesce(category, "Unknown"))
+  mutate(
+    category = sapply(bugs, classify_bug, dict = bug_dict)
+  )
+
+#classify bugs, fast
+bugs_long <- new_smart_abx %>%
+  select(id, infectious_source, inhosp_mortality28.x, trt_group, baseline_wbc, age, sex,  baseline_sofa, baseline_vent, baseline_anyvasopressor, location, preill_creat, priorhd,
+         urine_bugs, blood_bugs, sputum_bugs, other_bugs) %>%
+  tidyr::pivot_longer(cols = ends_with("_bugs"), names_to = "source", values_to = "bugs") %>%
+  unnest(bugs) %>%
+  mutate(category = classify_bugs_fast(bugs, bug_dict))
 
 # unknown bugs for review
 
@@ -1382,11 +1424,55 @@ unknown_bugs <- bugs_long %>%
   distinct(bugs) %>%
   arrange(bugs)
 
+
 # This gives you a tidy list of bugs to review and add to your dictionary
 unknown_bugs
 
 
+
+# look at microbiologic causes
+
+bugs_long %>%
+  group_by(category,trt_group) %>%
+  count()
+
+# add rows for missed important bacteria
+
+bug_dict <- bug_dict %>%
+  add_row(pattern = "Acinetobacter", category = "Gram-negative") %>%
+  add_row(pattern = "Proteus", category = "Gram-negative")
+
+
 ```
+
+### modeling with micro cause
+
+```{r}
+micro_source_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(infectious_source) + location + preill_creat + priorhd, data = new_smart_abx, family = "binomial")
+
+micro_source_results <- model_results(micro_source_model)
+micro_source_results
+
+micro_source_no_int_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(infectious_source) + location + preill_creat + priorhd, data = new_smart_abx, family = "binomial")
+
+micro_source_no_int_results <- model_results(micro_source_no_int_model)
+micro_source_no_int_results
+
+lrtest(micro_source_model, micro_source_no_int_model)
+
+# modeling with bug type
+
+bug_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(category) + location + preill_creat + priorhd, data = bugs_long, family = "binomial")
+
+bug_results <- model_results(bug_model)
+bug_results
+
+bug_no_int_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(category) + location + preill_creat + priorhd, data = bugs_long, family = "binomial")
+
+lrtest(bug_model, bug_no_int_model)
+
+```
+
 
 ## code to create survival plot
 
