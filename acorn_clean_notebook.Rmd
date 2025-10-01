@@ -1012,8 +1012,8 @@ smart_abx <- smart_abx %>%
 # wbc epic modeling
 
 epic_OR_data <- smart_abx %>%
-  mutate(`WBC Epic Cutoffs` = wbc_epic) %>%
-  group_by(`WBC Epic Cutoffs`) %>%
+  mutate(`WBC Clinical Cutoffs` = wbc_epic) %>%
+  group_by(`WBC Clinical Cutoffs`) %>%
   nest() %>%
   mutate(
     fit = map(data, function(df) glm(inhosp_mortality28 ~ trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + preill_creat + priorhd, data = df, family = "binomial")),
@@ -1026,8 +1026,8 @@ epic_OR_data <- smart_abx %>%
     LL = exp(ci[,1]),
     UL = exp(ci[2])
   ) %>% 
-  select(`WBC Epic Cutoffs`, OR, LL, UL)  %>%
-  arrange(`WBC Epic Cutoffs`) 
+  select(`WBC Clinical Cutoffs`, OR, LL, UL)  %>%
+  arrange(`WBC Clinical Cutoffs`) 
 
 epic_OR_data$` ` <- paste(rep(" ", 35), collapse = " ")
 
@@ -1048,10 +1048,30 @@ epic_OR_forest <- forest(epic_OR_data[, c(1, 5:6)],
             arrow_lab = c("Favors piperacillin/tazobactam", "Favors Cefepime"),
             xlim = c(0, 3),
             ticks_at = c(0.5, 1, 1.5, 2, 2.5),
-            title = "Figure E2: Mortality with Epic Cutoffs", 
+            title = "Figure E2: Mortality with Clinical Cutoffs", 
             theme = tm)
 epic_OR_forest
 
+epic_less_4 <- new_smart_abx %>%
+  filter(wbc_epic == "<4") 
+
+epic_under_four_model <- interaction_model(epic_less_4$inhosp_mortality28.x, epic_less_4)
+
+epic_under_four_results <- model_results(epic_under_four_model)
+
+epic_normal <- new_smart_abx %>%
+  filter(wbc_epic == "4-10") 
+
+epic_normal_model <- glm(inhosp_mortality28.x ~ trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + preill_creat + priorhd, data = epic_normal, family = "binomial")
+
+epic_normal_results <- model_results(epic_normal_model)
+
+epic_high <- new_smart_abx %>%
+  filter(wbc_epic == ">10")
+
+epic_high_model <- glm(inhosp_mortality28.x ~ trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + preill_creat + priorhd, data = epic_high, family = "binomial")
+
+epic_high_results <- model_results(epic_high_model)
 ```
 
 ## look at neutropenia
@@ -1471,6 +1491,21 @@ bug_no_int_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + age +
 
 lrtest(bug_model, bug_no_int_model)
 
+#restrict bug types to positive vs negative (remove fungi)
+
+no_fungi <- bugs_long %>%
+  filter(category == "Gram-negative" | category == "Gram-positive") 
+
+bug_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(category) + location + preill_creat + priorhd, data = no_fungi, family = "binomial")
+
+bug_results <- model_results(bug_model)
+bug_results
+
+bug_no_int_model <- glm(inhosp_mortality28.x ~ trt_group +  baseline_wbc + age + sex+  baseline_sofa + baseline_vent + baseline_anyvasopressor + factor(category) + location + preill_creat + priorhd, data = no_fungi, family = "binomial")
+
+lrtest(bug_model, bug_no_int_model)
+
+
 ```
 
 
@@ -1673,6 +1708,13 @@ new_smart_abx %>%
             range = range(baseline_wbc),
             min = min(baseline_wbc),
             max = max(baseline_wbc))
+
+new_smart_abx %>%
+  summarise(mean = mean(baseline_wbc),
+            median = median(baseline_wbc),
+            range = range(baseline_wbc),
+            min = min(baseline_wbc),
+            max = max(baseline_wbc))
 ```
 
 
@@ -1694,5 +1736,41 @@ surv_plot_data <- new_smart_abx %>%
 
 # Export the data frame to a CSV file
 write_csv(surv_plot_data, "surv_plot_data.csv")
+```
+
+### figure from IV with epic cutoffs
+```{r}
+#IV epic forest
+IV_epic_OR_data <- tibble('WBC Clinical Cutoffs' = c("<4", "4-10", ">10"), 
+                           OR = c(1.44, 0.96, 0.74), 
+                           LL = c(1.05, 0.65, 0.48), 
+                           UL = c(1.97, 1.42, 1.15))
+
+
+# Add a blank column for the forest plot to display CI.
+# Adjust the column width with space, and increase the number of spaces below 
+# to have a larger area to draw the CI. 
+IV_epic_OR_data$` ` <- paste(rep(" ", 35), collapse = " ")
+
+
+# Create a confidence interval column to display
+IV_epic_OR_data$`OR (95% CI)` <- sprintf("%.2f (%.2f to %.2f)",
+                                     IV_epic_OR_data$OR, IV_epic_OR_data$LL, IV_epic_OR_data$UL)
+
+
+tm <- forest_theme(core=list(fg_params=list(hjust=01, x=0.9)), rowhead=list(fg_params=list(hjust=0.5, x=0.5)), padding = unit(c(50, 50), "mm"))
+
+IV_Epic_OR_forest <- forest(IV_epic_OR_data[, c(1, 5:6)],
+            est = IV_epic_OR_data$OR,
+            lower = IV_epic_OR_data$LL, 
+            upper = IV_epic_OR_data$UL,
+            ci_column = 2,
+            ref_line = 1,
+            arrow_lab = c("Favors piperacillin/tazobactam", "Favors Cefepime"),
+            xlim = c(0, 2),
+            ticks_at = c(0.5, 1, 1.5, 2),
+            title = "Figure E4: Mortality with Clinical Cutoffs in the IV Cohort", 
+            theme = tm)
+IV_Epic_OR_forest
 ```
 
