@@ -1,6 +1,8 @@
 ---
 title: "acorn_clean_notebook"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
  
 
@@ -10,6 +12,7 @@ library(tidyverse)
 library(lmtest)
 library(tableone)
 library(officer)
+library(purrr)
 
 ```
 
@@ -174,6 +177,8 @@ modb <- glm(inhosp_mortality28 ~  trt_group + baseline_wbc + age + sex+  baselin
   )
   
   lrtest(moda, modb)
+  
+  anova(modb, moda)
 ```
 
 
@@ -313,8 +318,26 @@ lrtest(s_mortality_int, s_mortality)
 s_mortality_int_results <- model_results(s_mortality_int)
 
 s_mortality_results <- model_results(s_mortality)
+
+
 ```
 
+```{r}
+#sensitivity: no sepsis
+no_sepsis <- smart_abx %>%
+  filter(sepsis == "No")
+
+no_sepsis_mortality_int <- interaction_model(no_sepsis$inhosp_mortality28, no_sepsis)
+
+no_sepsis_mortality <- no_interaction_model(no_sepsis$inhosp_mortality28, no_sepsis)
+
+lrtest(no_sepsis_mortality_int, no_sepsis_mortality)
+
+#mortality results
+no_sepsis_mortality_int_results <- model_results(no_sepsis_mortality_int)
+
+no_sepsis_mortality_results <- model_results(no_sepsis_mortality)
+```
 
 
 ```{r}
@@ -1671,6 +1694,32 @@ ggplot(pred_grid, aes(x = baseline_wbc, y = pred_prob, color = trt_group)) +
     title = "Predicted Mortality by WBC and Treatment"
   ) +
   theme_minimal()
+
+#updated plot
+
+predicted_mortality_plot <- ggplot(pred_grid, aes(x = baseline_wbc, y = pred_prob, color = trt_group)) +
+  geom_line(linewidth = 1.2) +
+  labs(
+    title = "Figure E4: Predicted Mortality by Baseline WBC Count and Treatment",
+    x = "Baseline White Blood Cell Count",
+    y = "Predicted 28-Day Mortality Probability",
+    color = "Treatment Group"
+  ) +
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    limits = c(0, NA)
+  ) +
+  scale_color_manual(
+    values = c("#0072B2", "#D55E00")
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black"),
+    panel.grid.major.y = element_line(color = "gray90", linewidth = 0.3)
+  )
 ```
 ### table one with neutropenia and transplant
 
@@ -1741,7 +1790,7 @@ write_csv(surv_plot_data, "surv_plot_data.csv")
 ### figure from IV with epic cutoffs
 ```{r}
 #IV epic forest
-IV_epic_OR_data <- tibble('WBC Clinical Cutoffs' = c("<4", "4-10", ">10"), 
+IV_epic_OR_data <- tibble('WBC Group' = c("<4", "4-10", ">10"), 
                            OR = c(1.44, 0.96, 0.74), 
                            LL = c(1.05, 0.65, 0.48), 
                            UL = c(1.97, 1.42, 1.15))
@@ -1769,8 +1818,744 @@ IV_Epic_OR_forest <- forest(IV_epic_OR_data[, c(1, 5:6)],
             arrow_lab = c("Favors piperacillin/tazobactam", "Favors Cefepime"),
             xlim = c(0, 2),
             ticks_at = c(0.5, 1, 1.5, 2),
-            title = "Figure E4: Mortality with Clinical Cutoffs in the IV Cohort", 
+            title = "Figure 2: 28-Day Mortality by Baseline White Blood Cell Count in the ACORN Trial", 
             theme = tm)
 IV_Epic_OR_forest
+```
+
+```{r}
+
+no_OR_data <- smart_abx %>%
+  mutate(wbc_quartile = ntile(baseline_wbc, 4)) %>%
+  group_by(wbc_quartile) %>%
+  nest() %>%
+  mutate(
+    fit = map(data, function(df) glm(inhosp_mortality28 ~ trt_group + age + sex +  baseline_sofa + baseline_vent + baseline_anyvasopressor + source_of_infection + preill_creat + priorhd, data = df, family = "binomial")),
+    output = map(fit, tidy),
+    ci = map(fit, confint)) %>%
+  unnest(c(output, ci)) %>%
+  filter(term == "trt_groupzosyn") %>% 
+  mutate(
+    OR = exp(estimate),
+    LL = exp(ci[,1]),
+    UL = exp(ci[2])
+  ) %>% 
+    arrange(wbc_quartile) %>%
+  mutate('WBC Quartile' = factor(wbc_quartile, levels = c(1, 2, 3, 4), labels = c("<7", "7-11", "11-16", ">16"))) %>%
+  select('WBC Quartile', OR, LL, UL)
+
+no_OR_data$` ` <- paste(rep(" ", 35), collapse = " ")
+
+
+# Create a confidence interval column to display
+no_OR_data$`OR (95% CI)` <- sprintf("%.2f (%.2f to %.2f)",
+                                     no_OR_data$OR, no_OR_data$LL, no_OR_data$UL)
+
+
+tm <- forest_theme(core=list(fg_params=list(hjust=01, x=0.9)), rowhead=list(fg_params=list(hjust=0.5, x=0.5)), padding = unit(c(50, 50), "mm"))
+
+grant_figure <- forest(no_OR_data[, c(1, 5:6)],
+            est = no_OR_data$OR,
+            lower = no_OR_data$LL, 
+            upper = no_OR_data$UL,
+            ci_column = 2,
+            ref_line = 1,
+            arrow_lab = c("Favors piperacillin/tazobactam", "Favors Cefepime"),
+            xlim = c(0, 3),
+            ticks_at = c(0.5, 1, 1.5, 2, 2.5),
+            title = "Figure 2: 28-Day Mortality by Baseline White Blood Cell Quartile in the ACORN Trial", 
+            theme = tm)
+grant_figure
+```
+## Second Revisions
+
+### risk modeling
+
+First, need to examine for HTE using a risk-modeling approach based on risk for mortality and will use SOFA score for this
+
+```{r}
+risk_interaction_model <- glm(inhosp_mortality28 ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + baseline_sofa + baseline_sofa *trt_group + age + sex + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = smart_abx, family = "binomial")
+
+risk_int_results <- model_results(risk_interaction_model)
+risk_int_results
+
+#compare to model without this interaction
+
+normal_model <- glm(inhosp_mortality28 ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + baseline_sofa + age + sex + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = smart_abx, family = "binomial")
+
+lrtest(risk_interaction_model, normal_model)
+
+anova(normal_model, risk_interaction_model)
+```
+so with the above looks like interaction term is not significant and there is no significant difference between the models
+
+another way to potentially do this would be to stratify the cohort based on mortality risk (aka sofa score) and see if the interaction term remains significant within each quartile though would be choosing how to split the cohort more or less randomly
+
+```{r}
+
+#split the cohort into different sofa quartiles
+
+sofa_strat_data <- smart_abx %>%
+  mutate(acorn_strat = ntile(baseline_sofa, 4),
+         acorn_strat = as.factor(acorn_strat)) 
+
+new_interaction_model <- function(predictor, data) {
+modx <- glm(predictor ~ trt_group +  baseline_wbc + baseline_wbc*trt_group + age + sex + baseline_vent + baseline_anyvasopressor + source_of_infection + location + preill_creat + priorhd, data = data, family = "binomial")
+}
+
+sofa_1 <- sofa_strat_data %>%
+  filter(acorn_strat == 1)
+
+sofa_1_model <- new_interaction_model(sofa_1$inhosp_mortality28, sofa_1)
+
+sofa_1_results <- model_results(sofa_1_model)
+
+## looks like this is getting messed up because there are groups with no data (AKA no one on vent or pressors which makes sense)
+
+
+```
+
+```{r}
+#look at outcomes across each sofa quartile
+
+sofa_strat_data %>%
+  group_by(acorn_strat, trt_group, inhosp_mortality28) %>%
+  count()
+
+# create cleaner table
+stratified_tables <- sofa_strat_data %>%
+  group_by(acorn_strat) %>%
+  nest() %>%
+  mutate(
+    table = map(data, ~{
+      .x %>%
+        tbl_summary(
+          by = trt_group,
+          include = inhosp_mortality28,
+          statistic = list(all_categorical() ~ "{n} ({p}%)"),
+          digits = list(all_categorical() ~ c(0, 1))
+        ) %>%
+        add_p(test = all_categorical() ~ "fisher.test") %>%
+        modify_header(label ~ "**In-hospital Mortality**")
+    })
+  )
+
+walk2(stratified_tables$acorn_strat, stratified_tables$table, ~{
+  cat("\n\n=== Acorn Stratum:", .x, "===\n")
+  print(.y)
+})
+
+# Option 3: Wide format summary table
+summary_table <- sofa_strat_data %>%
+  group_by(acorn_strat, trt_group, inhosp_mortality28) %>%
+  count() %>%
+  group_by(acorn_strat, trt_group) %>%
+  mutate(
+    total = sum(n),
+    pct = round(100 * n / total, 1)
+  ) %>%
+  ungroup() %>%
+  mutate(n_pct = paste0(n, " (", pct, "%)")) %>%
+  select(acorn_strat, trt_group, inhosp_mortality28, n_pct) %>%
+  pivot_wider(
+    names_from = inhosp_mortality28,
+    values_from = n_pct,
+    values_fill = "0 (0%)"
+  )
+
+  
+```
+
+### penalized regression approach
+
+```{r}
+#prepare data and add in additional predictors
+smart_abx = overview_new%>%rename(id=record_id)%>%
+                          mutate(CKD = ifelse(CKD==2,1,CKD))%>%
+                          mutate(CKD = ifelse(is.na(CKD),0,CKD))%>%
+                        dplyr::select(id, trt_group, inhosp_mortality28, death14_newrrt14, icufreedays28, delc14, comagdelcfreedays14, comagdelc14, persistent_renal_dysfunction28, rrtfreedays28, newrrt28, newrrt14, highest_cr_28, age, sex, race.eth, baseline_sofa, baseline_coma_delirium, incident_aki_with_onstudy_14.factor, CKD, sepsis, received_vancomycin_14, received_assigned_therapy_28, MAKE14, preill_creat_calculate, preill_creat, preill_creat_observed,
+                                      baseline_vent, baseline_anyvasopressor, source_of_infection, location, priorhd, days_assigned_therapy_14, baseline_wbc, baseline_neutropenia, baseline_platelet, baseline_hemoglobin, baseline_Temp, baseline_pO2_art, baseline_pH_art)%>%
+  mutate(n=1)%>%
+  mutate(race_white = ifelse(race.eth=="White, Non-Hispanic", 1, 0))%>%
+  mutate(coma= as.factor(comagdelcfreedays14))
+
+smart_abx$incident_aki_with_onstudy_14.factor <- ordered(smart_abx$incident_aki_with_onstudy_14.factor,
+                                                         levels = c("Alive without AKI", "Stage 1 AKI", 
+                                     
+                                                               "Stage 2 AKI", "Stage 3 AKI", "Died"))
+
+smart_abx$source_of_infection <- as.factor(smart_abx$source_of_infection)
+
+smart_abx$baseline_neutropnia <- as.factor(smart_abx$baseline_neutropenia)
+```
+
+####cleaning new variables of interest
+
+```{r}
+#baseline platelet
+summary(smart_abx$baseline_platelet)
+
+sum(is.na(smart_abx$baseline_platelet))
+
+hist(smart_abx$baseline_platelet)
+
+#just 12 missing so will remove those
+
+smart_abx_clean <- smart_abx %>%
+  filter(!is.na(baseline_platelet))
+```
+
+
+```{r}
+#baseline hemoglobin
+summary(smart_abx$baseline_hemoglobin)
+
+hist(smart_abx$baseline_hemoglobin)
+
+#none missing which is good
+```
+
+```{r}
+#baseline temperature
+
+summary(smart_abx_clean$baseline_Temp)
+
+hist(smart_abx_clean$baseline_Temp)
+
+#min is 34 so some must be recorded as celsius
+smart_abx_clean <- smart_abx_clean %>%
+  mutate(clean_temp = ifelse(baseline_Temp > 40, baseline_Temp, (baseline_Temp * (9/5)) + 32)) %>%
+  filter(!is.na(clean_temp))
+
+summary(smart_abx_clean$clean_temp)
+
+```
+
+```{r}
+#blood gas data
+summary(smart_abx_clean$baseline_pH_art)
+#very high degree of missingness with >2200 missing
+
+```
+
+```{r}
+#final cleaning
+
+#make sure all are factor where needed
+factor_vars <- c(
+  "trt_group",
+  "inhosp_mortality28",
+  "death14_newrrt14",
+  "delc14",
+  "comagdelc14",
+  "persistent_renal_dysfunction28",
+  "newrrt28",
+  "newrrt14",
+  "sex",
+  "CKD",
+  "received_vancomycin_14",
+  "received_assigned_therapy_28",
+  "MAKE14",
+  "baseline_vent",
+  "baseline_anyvasopressor",
+  "location",
+  "priorhd",
+  "baseline_neutropenia",
+  "race_white",
+  "race.eth"
+)
+
+smart_abx_clean <- smart_abx_clean %>%
+  mutate(across(all_of(factor_vars), as.factor)) %>%
+  mutate(id = as.numeric(id))
+
+
+```
+
+#### prepare the data for analysis
+
+```{r}
+#split data into training and test, preserving distribution of baseline wbc
+install.packages("caret")
+library(caret)
+
+set.seed(123)
+training_samples <-createDataPartition(smart_abx_clean$baseline_wbc, p = 0.8, list = FALSE)
+
+train_data <- smart_abx_clean[training_samples, ]
+test_data <- smart_abx_clean[-training_samples, ]
+
+
+
+```
+
+
+```{r}
+#specify list of variables to include as predictors
+predictors <- c("age", "trt_group", "age", "sex", "baseline_sofa", "CKD", "sepsis", "baseline_vent", "baseline_anyvasopressor", "source_of_infection", "location", "priorhd", "baseline_wbc", "baseline_neutropenia", "baseline_platelet", "baseline_hemoglobin", "clean_temp")
+
+```
+
+```{r}
+#make sure included variables have complete cases
+
+# Keep id in the dataset but don't use it in model.matrix
+vars_needed <- c("id", predictors, "inhosp_mortality28")
+complete_idx <- complete.cases(train_data[, c(predictors, "inhosp_mortality28")])
+train_complete <- train_data[complete_idx, ]
+
+
+#create matric of predictors and interaction terms to include
+
+x <- model.matrix(
+  ~ age + trt_group + baseline_wbc + sex + baseline_sofa + CKD + sepsis + baseline_vent + baseline_anyvasopressor + source_of_infection + location + priorhd + baseline_neutropenia + baseline_platelet + baseline_hemoglobin + clean_temp +
+    age:trt_group + baseline_wbc:trt_group + baseline_sofa:trt_group + sepsis:trt_group + baseline_neutropenia:trt_group + baseline_platelet:trt_group + baseline_hemoglobin:trt_group + clean_temp:trt_group,
+  data = train_complete %>% select(all_of(predictors))
+)[, -1]
+
+y <- train_complete$inhosp_mortality28
+
+```
+
+```{r}
+#fit the model 
+
+
+#find the best lamba using cross-validation
+set.seed(123)
+cv_lasso <- cv.glmnet(x, y, alpha = 1, family = "binomial")
+
+#fit the final model on the training data
+model <- glmnet(x, y, alpha = 1, family = "binomial", lambda = cv_lasso$lambda.min)
+
+#display regression coefficients
+
+# Extract non-zero coefficients
+coef_matrix <- coef(model)
+selected_vars <- coef_matrix[coef_matrix[,1] != 0, , drop = FALSE]
+print(selected_vars)
+
+# 1. Show LASSO coefficients and ORs
+coef_df <- data.frame(
+  variable = rownames(coef_matrix),
+  coefficient = coef_matrix[,1]
+) %>%
+  filter(coefficient != 0) %>%
+  mutate(OR = exp(coefficient)) %>%
+  arrange(desc(abs(coefficient)))
+print(coef_df)
+```
+
+
+```{r}
+library(boot)
+
+# Bootstrap function
+boot_coef <- function(data, indices) {
+  d <- data[indices, ]
+  
+  # Recreate x and y from bootstrap sample
+  x_boot <- model.matrix(
+    ~ age + baseline_wbc + ...,  # Your formula
+    data = d %>% select(all_of(predictors))
+  )[, -1]
+  
+  y_boot <- d$inhosp_mortality28
+  
+  # Fit LASSO
+  cv_boot <- cv.glmnet(x_boot, y_boot, alpha = 1, family = "binomial")
+  model_boot <- glmnet(x_boot, y_boot, alpha = 1, family = "binomial", 
+                       lambda = cv_boot$lambda.min)
+  
+  # Return coefficients
+  as.vector(coef(model_boot))
+}
+
+# Run bootstrap (this takes time!)
+set.seed(123)
+boot_results <- boot(train_complete, boot_coef, R = 1000)
+
+# Get 95% CIs for each coefficient
+boot_ci <- sapply(1:ncol(boot_results$t), function(i) {
+  boot.ci(boot_results, type = "perc", index = i)$percent[4:5]
+})
+
+# Combine with coefficients
+coef_with_ci <- data.frame(
+  variable = rownames(coef_matrix),
+  coefficient = coef_matrix[,1],
+  OR = exp(coef_matrix[,1]),
+  lower_CI = exp(boot_ci[1,]),
+  upper_CI = exp(boot_ci[2,])
+) %>%
+  filter(coefficient != 0)
+
+print(coef_with_ci)
+```
+
+```{r}
+# Prepare test data 
+
+# Keep id in the dataset but don't use it in model.matrix
+vars_needed <- c("id", predictors, "inhosp_mortality28")
+complete_idx_test <- complete.cases(test_data[, c(predictors, "inhosp_mortality28")])
+test_complete <- test_data[complete_idx_test, ]
+
+#create test model matrix
+x_test <- model.matrix(
+  ~ age + trt_group + baseline_wbc + sex + baseline_sofa + CKD + sepsis + baseline_vent + baseline_anyvasopressor + source_of_infection + location + priorhd + baseline_neutropenia + baseline_platelet + baseline_hemoglobin + clean_temp +
+    age:trt_group + baseline_wbc:trt_group + baseline_sofa:trt_group + sepsis:trt_group + baseline_neutropenia:trt_group + baseline_platelet:trt_group + baseline_hemoglobin:trt_group + clean_temp:trt_group,
+  data = test_data %>% select(all_of(predictors))
+)[, -1]
+
+#define outcome in test data
+y_test <- test_complete$inhosp_mortality28
+
+# Make predictions
+test_probs <- predict(model, newx = x_test, type = "response")
+test_preds <- ifelse(test_probs > 0.5, 1, 0)
+
+# Evaluate performance
+# Get the factor levels
+outcome_levels <- levels(test_complete$inhosp_mortality28)
+
+# Make predictions as factor
+test_preds_factor <- factor(
+  ifelse(test_probs > 0.5, outcome_levels[2], outcome_levels[1]),
+  levels = outcome_levels
+)
+
+# Confusion matrix
+confusionMatrix(test_preds_factor, test_complete$inhosp_mortality28)
+
+# calculate AUC
+roc_obj <- roc(test_complete$inhosp_mortality28, test_probs[,1])
+auc(roc_obj)
+plot(roc_obj)
+```
+```{r}
+# Plot how coefficients change with lambda
+plot(cv_lasso)  # Shows cross-validated error vs lambda
+
+# Coefficient path
+plot(glmnet(x, y, alpha = 1, family = "binomial"), xvar = "lambda", label = TRUE)
+abline(v = log(cv_lasso$lambda.min), lty = 2)
+```
+We would expect this plot to be more U-shaped or at least be flipped the opposite way. This may be due to not having enough predictive signal or lamba not going low enough
+
+```{r}
+#additional diagnostics
+# Check the lambda range
+range(cv_lasso$lambda)
+cv_lasso$lambda.min  # Is this at or near the minimum lambda tested?
+
+# Check if lambda.min is at the edge
+which.min(cv_lasso$cvm)  # Position of minimum - is it 1 (first value)?
+
+# Look at the actual CV errors
+plot(cv_lasso)
+points(log(cv_lasso$lambda.min), min(cv_lasso$cvm), col = "red", pch = 19, cex = 2)
+```
+
+```{r}
+#coefficient path
+plot(glmnet(x, y, alpha = 1, family = "binomial"), xvar = "lambda", label = TRUE)
+abline(v = log(cv_lasso$lambda.min), lty = 2)
+```
+
+
+```{r}
+# lambda.min gives best performance, but lambda.1se gives simpler model
+model_1se <- glmnet(x, y, alpha = 1, family = "binomial", lambda = cv_lasso$lambda.1se)
+coef(model_1se)  # Usually has fewer non-zero coefficients (more sparse)
+```
+
+#### Additional model performance evaluation
+
+```{r}
+# Get predictions on test set
+test_probs <- predict(model, newx = x_test, type = "response")[,1]
+
+# ============================================================================
+# 1. DISCRIMINATION: AUC with 95% CI (DeLong's method)
+# ============================================================================
+
+roc_obj <- roc(y_test, test_probs)
+
+# Get AUC with CI
+auc_result <- ci.auc(roc_obj, method = "delong")
+cat("AUC:", round(auc(roc_obj), 3), "\n")
+cat("95% CI:", round(auc_result[1], 3), "-", round(auc_result[3], 3), "\n")
+```
+```{r}
+# Create ROC plot
+roc_plot <- ggroc(roc_obj, legacy.axes = TRUE) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
+  annotate("text", x = 0.75, y = 0.25, 
+           label = paste0("AUC = ", round(auc(roc_obj), 3), 
+                         "\n95% CI: ", round(auc_result[1], 3), 
+                         "–", round(auc_result[3], 3)),
+           hjust = 0, size = 4) +
+  labs(
+    x = "1 - Specificity (False Positive Rate)",
+    y = "Sensitivity (True Positive Rate)",
+    title = "Receiver Operating Characteristic Curve"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  ) +
+  coord_equal()
+
+print(roc_plot)
+
+# Save ROC plot
+ggsave("roc_curve.tiff", roc_plot, width = 6, height = 6, dpi = 600, compression = "lzw")
+
+```
+
+```{r}
+# ============================================================================
+# 2. CALIBRATION: Calibration plot and Hosmer-Lemeshow test
+# ============================================================================
+
+
+
+# Hosmer-Lemeshow test (typically use 10 groups)
+hl_test <- hoslem.test(as.numeric(y_test) - 1, test_probs, g = 10)
+cat("\nHosmer-Lemeshow Test:\n")
+cat("Chi-square:", round(hl_test$statistic, 3), "\n")
+cat("p-value:", round(hl_test$p.value, 3), "\n")
+
+# Create calibration plot data
+cal_data <- data.frame(
+  predicted = test_probs,
+  observed = as.numeric(y_test) - 1  # Convert to 0/1 if factor
+)
+
+# Group predictions into deciles
+cal_data$pred_group <- cut(cal_data$predicted, 
+                            breaks = quantile(cal_data$predicted, probs = seq(0, 1, 0.1)),
+                            include.lowest = TRUE,
+                            labels = FALSE)
+
+# Calculate observed proportion in each decile
+cal_summary <- cal_data %>%
+  group_by(pred_group) %>%
+  summarise(
+    mean_predicted = mean(predicted),
+    observed_prop = mean(observed),
+    n = n(),
+    .groups = "drop"
+  )
+
+# Create calibration plot
+cal_plot <- ggplot(cal_summary, aes(x = mean_predicted, y = observed_prop)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
+  geom_point(size = 3, color = "#0072B2") +
+  geom_line(color = "#0072B2", linewidth = 0.8) +
+  geom_smooth(method = "loess", se = TRUE, color = "#D55E00", 
+              fill = "#D55E00", alpha = 0.2, linewidth = 0.8) +
+  scale_x_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    limits = c(0, NA)
+  ) +
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    limits = c(0, NA)
+  ) +
+  labs(
+    x = "Predicted Probability",
+    y = "Observed Proportion",
+    title = "Calibration Plot",
+    subtitle = paste0("Hosmer-Lemeshow χ² = ", round(hl_test$statistic, 2), 
+                     ", p = ", round(hl_test$p.value, 3))
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, size = 10)
+  ) +
+  coord_equal(xlim = c(0, max(c(cal_summary$mean_predicted, cal_summary$observed_prop))),
+              ylim = c(0, max(c(cal_summary$mean_predicted, cal_summary$observed_prop))))
+
+print(cal_plot)
+
+# Save calibration plot
+ggsave("calibration_plot.tiff", cal_plot, width = 6, height = 6, dpi = 600, compression = "lzw")
+```
+```{r}
+# ============================================================================
+# 3. CLASSIFICATION PERFORMANCE: Optimal threshold using Youden's Index
+# ============================================================================
+
+# Find optimal threshold using Youden's index
+coords_result <- coords(roc_obj, x = "best", best.method = "youden", 
+                        ret = c("threshold", "sensitivity", "specificity", 
+                                "ppv", "npv", "accuracy"))
+
+optimal_threshold <- coords_result$threshold
+cat("\n=== Optimal Threshold (Youden's Index) ===\n")
+cat("Threshold:", round(optimal_threshold, 3), "\n")
+cat("Sensitivity:", round(coords_result$sensitivity, 3), "\n")
+cat("Specificity:", round(coords_result$specificity, 3), "\n")
+cat("PPV:", round(coords_result$ppv, 3), "\n")
+cat("NPV:", round(coords_result$npv, 3), "\n")
+cat("Accuracy:", round(coords_result$accuracy, 3), "\n")
+
+# Create binary predictions using optimal threshold
+test_preds_binary <- ifelse(test_probs > optimal_threshold, 1, 0)
+
+# Confusion matrix with detailed statistics
+y_test_numeric <- as.numeric(y_test) - 1  # Convert to 0/1 if factor
+cm <- confusionMatrix(
+  factor(test_preds_binary, levels = c(0, 1)),
+  factor(y_test_numeric, levels = c(0, 1)),
+  positive = "1"
+)
+
+print(cm)
+```
+```{r}
+# ============================================================================
+# 4. CREATE SUMMARY TABLE OF PERFORMANCE METRICS
+# ============================================================================
+
+# Calculate 95% CIs for sensitivity, specificity, PPV, NPV
+sens_ci <- ci.se(roc_obj, specificities = coords_result$specificity)
+spec_ci <- ci.sp(roc_obj, sensitivities = coords_result$sensitivity)
+
+# Create performance summary table
+performance_table <- data.frame(
+  Metric = c("AUC", "Sensitivity", "Specificity", "PPV", "NPV", 
+             "Accuracy", "Optimal Threshold"),
+  Value = c(
+    sprintf("%.3f", auc(roc_obj)),
+    sprintf("%.3f", coords_result$sensitivity),
+    sprintf("%.3f", coords_result$specificity),
+    sprintf("%.3f", coords_result$ppv),
+    sprintf("%.3f", coords_result$npv),
+    sprintf("%.3f", coords_result$accuracy),
+    sprintf("%.3f", optimal_threshold)
+  ),
+  CI_95 = c(
+    sprintf("%.3f–%.3f", auc_result[1], auc_result[3]),
+    sprintf("%.3f–%.3f", sens_ci[1], sens_ci[3]),
+    sprintf("%.3f–%.3f", spec_ci[1], spec_ci[3]),
+    "–",  # PPV/NPV CIs require different calculation
+    "–",
+    sprintf("%.3f–%.3f", 
+            binom.test(sum(test_preds_binary == y_test_numeric), 
+                      length(y_test_numeric))$conf.int[1],
+            binom.test(sum(test_preds_binary == y_test_numeric), 
+                      length(y_test_numeric))$conf.int[2]),
+    "–"
+  )
+)
+
+print(performance_table)
+
+# Save as CSV for manuscript table
+write.csv(performance_table, "model_performance_metrics.csv", row.names = FALSE)
+
+```
+```{r}
+# ============================================================================
+# 5. ADDITIONAL USEFUL PLOTS
+# ============================================================================
+
+# Plot showing threshold selection
+threshold_plot <- ggplot(data.frame(
+  threshold = roc_obj$thresholds,
+  sensitivity = roc_obj$sensitivities,
+  specificity = roc_obj$specificities,
+  youden = roc_obj$sensitivities + roc_obj$specificities - 1
+), aes(x = threshold)) +
+  geom_line(aes(y = sensitivity, color = "Sensitivity"), linewidth = 1) +
+  geom_line(aes(y = specificity, color = "Specificity"), linewidth = 1) +
+  geom_line(aes(y = youden, color = "Youden Index"), linewidth = 1, linetype = "dashed") +
+  geom_vline(xintercept = optimal_threshold, linetype = "dotted", color = "red") +
+  scale_color_manual(
+    values = c("Sensitivity" = "#0072B2", 
+               "Specificity" = "#D55E00", 
+               "Youden Index" = "#009E73")
+  ) +
+  labs(
+    x = "Threshold",
+    y = "Value",
+    title = "Optimal Threshold Selection",
+    color = NULL
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black"),
+    legend.position = "bottom"
+  )
+
+print(threshold_plot)
+```
+
+```{r}
+# ============================================================================
+# 6. CREATE COMBINED FIGURE FOR MANUSCRIPT
+# ============================================================================
+
+library(patchwork)
+
+combined_plot <- roc_plot + cal_plot +
+  plot_annotation(
+    tag_levels = "A",
+    theme = theme(plot.tag = element_text(face = "bold", size = 14))
+  )
+
+print(combined_plot)
+
+ggsave("combined_performance_figure.tiff", 
+       combined_plot, 
+       width = 12, 
+       height = 6, 
+       dpi = 600, 
+       compression = "lzw")
+```
+
+```{r}
+# More accurate CIs for PPV and NPV using exact binomial method
+# True Positives
+tp <- sum(test_preds_binary == 1 & y_test_numeric == 1)
+# False Positives
+fp <- sum(test_preds_binary == 1 & y_test_numeric == 0)
+# True Negatives
+tn <- sum(test_preds_binary == 0 & y_test_numeric == 0)
+# False Negatives
+fn <- sum(test_preds_binary == 0 & y_test_numeric == 1)
+
+# PPV CI
+ppv_ci <- binom.test(tp, tp + fp)$conf.int
+cat("PPV: ", round(coords_result$ppv, 3), 
+    " (95% CI: ", round(ppv_ci[1], 3), "–", round(ppv_ci[2], 3), ")\n", sep = "")
+
+# NPV CI
+npv_ci <- binom.test(tn, tn + fn)$conf.int
+cat("NPV: ", round(coords_result$npv, 3), 
+    " (95% CI: ", round(npv_ci[1], 3), "–", round(npv_ci[2], 3), ")\n", sep = "")
+
+```
+
+```{r}
+
+#save data for future use
+saveRDS(smart_abx, file = "smart_abx.RDS")
+
+saveRDS(smart_abx_clean, file = "smart_abx_clean.RDS")
+
+saveRDS(train_data, file = "train_data.RDS")
+
+saveRDS(test_data, file = "test_data.RDS")
+
 ```
 
